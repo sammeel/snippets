@@ -1,0 +1,81 @@
+parameters:
+  - name: displayName
+    type: string
+    default: "Deploy Bicep Template"
+  - name: azureSubscription
+    type: string
+  - name: resourceGroup
+    type: string
+  - name: templateFile
+    type: string
+  - name: templateParametersFile
+    type: string
+  - name: location
+    type: string
+    default: "westeurope"
+  - name: deploymentOutputs
+    type: string
+    default: ""
+  - name: additionalParameters
+    type: string
+    default: ""
+
+steps:
+  - task: AzureCLI@2
+    displayName: ${{parameters.displayName}}
+    inputs:
+      azureSubscription: ${{parameters.azureSubscription}}
+      scriptType: "pscore"
+      scriptLocation: "inlineScript"
+      inlineScript: |
+        $outputVariable = "${{ parameters.deploymentOutputs }}"
+
+        $template = "${{parameters.templateFile}}"
+        $resourceGroup = "${{parameters.resourceGroup}}"
+        $parametersFile = "${{parameters.templateParametersFile}}"
+        $additionalParameters = "${{ parameters.additionalParameters }}"
+        $location = "${{parameters.location}}"
+
+        Write-Output "template file: $template"
+        Write-Output "parameters file: $parametersFile"
+        Write-Output "resource group: $resourceGroup"
+
+        Write-Output "Creating resource group if not exists"
+        az group create --name $resourceGroup --location $location
+
+        $fileName = Split-Path $template -leaf
+        $timestamp = (Get-Date).ToString("yyyyMMdd-HHmmss")
+        $uniqueId = (New-Guid).ToString().Substring(0,4)
+        $name = "$filename-$timestamp-$uniqueId"
+
+        Write-Output "Starting deployment with name '$name'"
+        if ($additionalParameters.length -gt 0) {
+          Write-Output "Running with additional parameters"
+          $rawDeploymentOutput = az deployment group create --name $name -f $template -g $resourceGroup --parameters $parametersFile --parameters $additionalParameters
+        } else {
+          Write-Output "Running without additional parameters"
+          $rawDeploymentOutput = az deployment group create --name $name -f $template -g $resourceGroup --parameters $parametersFile
+        }
+
+        $exitStatus = $?
+        if ($exitStatus -eq $false) {
+          Write-Error "Deployment failed. Exiting"
+          exit 1
+        }
+
+        Write-Output "Deployment done"
+
+        if ($outputVariable.length -eq 0) {
+          Write-Output "No output variable specified. Not reading any output variables."
+        } else {
+          Write-Output "Reading output of deployment with name '$name' to variable '$outputVariable'"
+          $rawDeploymentOutput = az deployment group show --resource-group $resourceGroup --name $name
+          $deploymentOutput = $rawDeploymentOutput | ConvertFrom-Json
+          if ($deploymentOutput.properties.outputs -ne $null) {
+            $outputJson = $deploymentOutput.properties.outputs | ConvertTo-Json -Compress
+            Write-Output "##vso[task.setvariable variable=$outputVariable]$outputJson"
+          } else {
+            Write-Output "outputs is null, variable will be cleared"
+            Write-Output "##vso[task.setvariable variable=$outputVariable]"
+          }
+        }
